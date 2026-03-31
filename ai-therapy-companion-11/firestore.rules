@@ -1,0 +1,176 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional)
+    //   - createdAt: string (optional, date-time)
+    //   - settings: map (optional)
+    //
+    // Collection: /moods/{moodId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - uid: string (required)
+    //   - mood: string (required, enum: happy, calm, neutral, anxious, sad, angry)
+    //   - intensity: number (optional)
+    //   - note: string (optional)
+    //   - timestamp: string (required, date-time)
+    //
+    // Collection: /journals/{journalId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - uid: string (required)
+    //   - title: string (optional)
+    //   - content: string (required)
+    //   - mood: string (optional)
+    //   - tags: list (optional)
+    //   - aiInsights: string (optional)
+    //   - timestamp: string (required, date-time)
+    //
+    // Collection: /chatSessions/{sessionId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - uid: string (required)
+    //   - title: string (optional)
+    //   - lastMessage: string (optional)
+    //   - updatedAt: string (required, date-time)
+    //   - createdAt: string (required, date-time)
+    //
+    // Collection: /chatSessions/{sessionId}/messages/{messageId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - role: string (required, enum: user, model)
+    //   - content: string (required)
+    //   - image: string (optional)
+    //   - timestamp: string (required, date-time)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "shyamsundhrkarne@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500)) &&
+             (!('createdAt' in data) || isValidDateString(data.createdAt));
+    }
+
+    function isValidMood(data) {
+      return hasRequiredFields(['uid', 'mood', 'timestamp']) &&
+             data.uid == request.auth.uid &&
+             data.mood in ['happy', 'calm', 'neutral', 'anxious', 'sad', 'angry'] &&
+             (!('intensity' in data) || (data.intensity is number && data.intensity >= 0 && data.intensity <= 10)) &&
+             (!('note' in data) || (data.note is string && data.note.size() < 1000)) &&
+             isValidDateString(data.timestamp);
+    }
+
+    function isValidJournal(data) {
+      return hasRequiredFields(['uid', 'content', 'timestamp']) &&
+             data.uid == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             (!('title' in data) || (data.title is string && data.title.size() < 200)) &&
+             isValidDateString(data.timestamp);
+    }
+
+    function isValidChatSession(data) {
+      return hasRequiredFields(['uid', 'createdAt', 'updatedAt']) &&
+             data.uid == request.auth.uid &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidChatMessage(data) {
+      return hasRequiredFields(['role', 'content', 'timestamp']) &&
+             data.role in ['user', 'model'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             isValidDateString(data.timestamp);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+    }
+
+    match /moods/{moodId} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() && isValidMood(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.uid == request.auth.uid && isValidMood(request.resource.data);
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    match /journals/{journalId} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() && isValidJournal(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.uid == request.auth.uid && isValidJournal(request.resource.data);
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    match /chatSessions/{sessionId} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() && isValidChatSession(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.uid == request.auth.uid && isValidChatSession(request.resource.data);
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && get(/databases/$(database)/documents/chatSessions/$(sessionId)).data.uid == request.auth.uid;
+        allow create: if isAuthenticated() && get(/databases/$(database)/documents/chatSessions/$(sessionId)).data.uid == request.auth.uid && isValidChatMessage(request.resource.data);
+      }
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
